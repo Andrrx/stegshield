@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Build outputs
+build/
+dist/
+*.egg-info/
+
+# IDE/editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Data and model artifacts
+data/raw/*
+data/processed/*
+data/splits/*
+outputs/models/*
+outputs/reports/*
+outputs/figures/*
+
+# Keep directory placeholders
+!data/raw/.gitkeep
+!data/raw/safe/
+!data/raw/safe/.gitkeep
+!data/raw/suspicious/
+!data/raw/suspicious/.gitkeep
+!data/raw/dangerous/
+!data/raw/dangerous/.gitkeep
+!data/processed/.gitkeep
+!data/splits/.gitkeep
+!outputs/models/.gitkeep
+!outputs/reports/.gitkeep
+!outputs/figures/.gitkeep
