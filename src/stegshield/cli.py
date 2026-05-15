@@ -6,6 +6,7 @@ from rich.console import Console
 from rich.table import Table
 
 from stegshield.analysis import analyze_image
+from stegshield.data.splits import collect_labeled_images, create_stratified_splits, write_split_csvs
 
 app = typer.Typer(help="Analyze image files for suspicious or dangerous indicators.")
 console = Console()
@@ -34,6 +35,72 @@ def analyze(
         return
 
     _print_human_report(result)
+
+
+@app.command("prepare-dataset")
+def prepare_dataset(
+    raw_dir: Path = typer.Option(
+        Path("data/raw"),
+        "--raw-dir",
+        help="Directory containing safe, suspicious, and dangerous subdirectories.",
+    ),
+    output_dir: Path = typer.Option(
+        Path("data/splits"),
+        "--output-dir",
+        help="Directory where train.csv, val.csv, and test.csv will be written.",
+    ),
+    seed: int = typer.Option(42, "--seed", help="Random seed for deterministic splitting."),
+) -> None:
+    """Create train/validation/test CSV files from labeled image folders."""
+    samples = collect_labeled_images(raw_dir)
+    if not samples:
+        raise typer.BadParameter(f"No labeled images found under {raw_dir}")
+
+    splits = create_stratified_splits(samples=samples, seed=seed)
+    write_split_csvs(splits=splits, output_dir=output_dir)
+
+    console.print("[bold]Dataset splits created[/bold]")
+    console.print(f"Raw directory: {raw_dir}")
+    console.print(f"Output directory: {output_dir}")
+    for split_name, split_samples in splits.items():
+        console.print(f"{split_name}: {len(split_samples)} samples")
+
+
+@app.command("train-cnn")
+def train_cnn_command(
+    train_csv: Path = typer.Option(Path("data/splits/train.csv"), "--train-csv"),
+    val_csv: Path = typer.Option(Path("data/splits/val.csv"), "--val-csv"),
+    output_model: Path = typer.Option(Path("outputs/models/stegshield_cnn.pt"), "--output-model"),
+    output_metrics: Path = typer.Option(
+        Path("outputs/reports/training_metrics.json"),
+        "--output-metrics",
+    ),
+    epochs: int = typer.Option(5, "--epochs", min=1),
+    batch_size: int = typer.Option(16, "--batch-size", min=1),
+    learning_rate: float = typer.Option(0.001, "--learning-rate", min=0.0),
+    image_size: int = typer.Option(224, "--image-size", min=32),
+    device: str = typer.Option("cpu", "--device", help="Torch device, for example cpu or cuda."),
+) -> None:
+    """Train the custom CNN from scratch using prepared split CSV files."""
+    from stegshield.train_cnn import TrainingConfig, train_cnn
+
+    config = TrainingConfig(
+        train_csv=train_csv,
+        val_csv=val_csv,
+        output_model=output_model,
+        output_metrics=output_metrics,
+        epochs=epochs,
+        batch_size=batch_size,
+        learning_rate=learning_rate,
+        image_size=image_size,
+        device=device,
+    )
+    metrics = train_cnn(config)
+
+    console.print("[bold]Training complete[/bold]")
+    console.print(f"Model: {output_model}")
+    console.print(f"Metrics: {output_metrics}")
+    console.print(f"Best validation accuracy: {metrics['best_val_accuracy']:.4f}")
 
 
 def _print_human_report(result: dict[str, object]) -> None:

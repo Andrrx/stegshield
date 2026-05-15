@@ -16,7 +16,7 @@ Later versions will expose the same analysis pipeline through an API so applicat
 
 ## Current Status
 
-Planning and repository setup.
+The project has an initial metadata analyzer CLI and the first custom CNN training scaffold.
 
 ## Planned Features
 
@@ -62,6 +62,45 @@ Run tests:
 
 ```bash
 pytest
+```
+
+## Dataset Preparation
+
+Place images in the labeled folders:
+
+```text
+data/raw/safe/
+data/raw/suspicious/
+data/raw/dangerous/
+```
+
+Then create train/validation/test CSV files:
+
+```bash
+stegshield prepare-dataset
+```
+
+This writes:
+
+```text
+data/splits/train.csv
+data/splits/val.csv
+data/splits/test.csv
+```
+
+## Custom CNN Training
+
+After installing ML dependencies and preparing the dataset:
+
+```bash
+stegshield train-cnn --epochs 5 --batch-size 16 --device cpu
+```
+
+The default outputs are:
+
+```text
+outputs/models/stegshield_cnn.pt
+outputs/reports/training_metrics.json
 ```
 
 ## Dataset Direction
