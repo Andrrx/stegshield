@@ -1,4 +1,5 @@
 from typer.testing import CliRunner
+from PIL import Image
 
 from stegshield.cli import app
 
@@ -9,3 +10,27 @@ def test_cli_help() -> None:
 
     assert result.exit_code == 0
     assert "Analyze image files" in result.output
+
+
+def test_analyze_safe_png(tmp_path) -> None:
+    image_path = tmp_path / "safe.png"
+    Image.new("RGB", (10, 10), color="white").save(image_path)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["analyze", str(image_path), "--json"])
+
+    assert result.exit_code == 0
+    assert '"label": "safe"' in result.output
+    assert '"detected_type": "png"' in result.output
+
+
+def test_analyze_extension_mismatch(tmp_path) -> None:
+    image_path = tmp_path / "mismatch.jpg"
+    Image.new("RGB", (10, 10), color="white").save(image_path, format="PNG")
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["analyze", str(image_path), "--json"])
+
+    assert result.exit_code == 0
+    assert '"label": "suspicious"' in result.output
+    assert "extension_type_mismatch" in result.output
