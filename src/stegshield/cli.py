@@ -6,6 +6,7 @@ from rich.console import Console
 from rich.table import Table
 
 from stegshield.analysis import analyze_image
+from stegshield.data.kaggle_stegoimages import create_kaggle_stegoimage_splits
 from stegshield.data.splits import collect_labeled_images, create_stratified_splits, write_split_csvs
 
 app = typer.Typer(help="Analyze image files for suspicious or dangerous indicators.")
@@ -50,8 +51,23 @@ def prepare_dataset(
         help="Directory where train.csv, val.csv, and test.csv will be written.",
     ),
     seed: int = typer.Option(42, "--seed", help="Random seed for deterministic splitting."),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Overwrite existing train.csv, val.csv, and test.csv files.",
+    ),
 ) -> None:
     """Create train/validation/test CSV files from labeled image folders."""
+    existing_split_files = [
+        output_dir / "train.csv",
+        output_dir / "val.csv",
+        output_dir / "test.csv",
+    ]
+    if not force and any(path.exists() for path in existing_split_files):
+        raise typer.BadParameter(
+            "Split CSV files already exist. Use --force only if you want to overwrite them."
+        )
+
     samples = collect_labeled_images(raw_dir)
     if not samples:
         raise typer.BadParameter(f"No labeled images found under {raw_dir}")
@@ -60,6 +76,41 @@ def prepare_dataset(
     write_split_csvs(splits=splits, output_dir=output_dir)
 
     console.print("[bold]Dataset splits created[/bold]")
+    console.print(f"Raw directory: {raw_dir}")
+    console.print(f"Output directory: {output_dir}")
+    for split_name, split_samples in splits.items():
+        console.print(f"{split_name}: {len(split_samples)} samples")
+
+
+@app.command("import-kaggle-splits")
+def import_kaggle_splits(
+    raw_dir: Path = typer.Option(
+        Path("data/raw"),
+        "--raw-dir",
+        help="Project raw data directory containing labeled kaggle_stegoimages folders.",
+    ),
+    output_dir: Path = typer.Option(
+        Path("data/splits"),
+        "--output-dir",
+        help="Directory where Kaggle split CSV files will be written.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Overwrite existing Kaggle split CSV files.",
+    ),
+) -> None:
+    """Create split CSVs while preserving the Kaggle Stego Images official split."""
+    try:
+        splits = create_kaggle_stegoimage_splits(
+            raw_dir=raw_dir,
+            output_dir=output_dir,
+            force=force,
+        )
+    except FileExistsError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    console.print("[bold]Kaggle Stego Images splits imported[/bold]")
     console.print(f"Raw directory: {raw_dir}")
     console.print(f"Output directory: {output_dir}")
     for split_name, split_samples in splits.items():
@@ -78,7 +129,7 @@ def train_cnn_command(
     epochs: int = typer.Option(5, "--epochs", min=1),
     batch_size: int = typer.Option(16, "--batch-size", min=1),
     learning_rate: float = typer.Option(0.001, "--learning-rate", min=0.0),
-    image_size: int = typer.Option(224, "--image-size", min=32),
+    image_size: int = typer.Option(256, "--image-size", min=32),
     device: str = typer.Option("cpu", "--device", help="Torch device, for example cpu or cuda."),
 ) -> None:
     """Train the custom CNN from scratch using prepared split CSV files."""

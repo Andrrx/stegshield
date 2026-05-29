@@ -22,7 +22,7 @@ class TrainingConfig:
     epochs: int = 5
     batch_size: int = 16
     learning_rate: float = 0.001
-    image_size: int = 224
+    image_size: int = 256
     device: str = "cpu"
 
 

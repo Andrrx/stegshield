@@ -31,9 +31,9 @@ dist/
 Thumbs.db
 
 # Data and model artifacts
-data/raw/*
-data/processed/*
-data/splits/*
+data/raw/**
+data/processed/**
+data/splits/**
 outputs/models/*
 outputs/reports/*
 outputs/figures/*
@@ -42,9 +42,15 @@ outputs/figures/*
 !data/raw/.gitkeep
 !data/raw/safe/
 !data/raw/safe/.gitkeep
+data/raw/safe/**
+!data/raw/safe/.gitkeep
 !data/raw/suspicious/
 !data/raw/suspicious/.gitkeep
+data/raw/suspicious/**
+!data/raw/suspicious/.gitkeep
 !data/raw/dangerous/
+!data/raw/dangerous/.gitkeep
+data/raw/dangerous/**
 !data/raw/dangerous/.gitkeep
 !data/processed/.gitkeep
 !data/splits/.gitkeep

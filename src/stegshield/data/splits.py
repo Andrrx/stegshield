@@ -25,6 +25,10 @@ class DatasetSample:
     label: str
 
 
+def project_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
 def collect_labeled_images(raw_dir: Path) -> list[DatasetSample]:
     """Collect images from data/raw/{safe,suspicious,dangerous}."""
     raw_dir = raw_dir.expanduser().resolve()
@@ -37,7 +41,7 @@ def collect_labeled_images(raw_dir: Path) -> list[DatasetSample]:
 
         for path in sorted(label_dir.rglob("*")):
             if path.is_file() and path.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS:
-                samples.append(DatasetSample(path=str(path), label=label))
+                samples.append(DatasetSample(path=path.relative_to(raw_dir).as_posix(), label=label))
 
     return samples
 
@@ -89,16 +93,42 @@ def write_split_csvs(splits: dict[str, list[DatasetSample]], output_dir: Path) -
         write_samples_csv(samples, output_dir / f"{split_name}.csv")
 
 
-def write_samples_csv(samples: list[DatasetSample], output_path: Path) -> None:
+def write_samples_csv(
+    samples: list[DatasetSample],
+    output_path: Path,
+    raw_dir: Path | None = None,
+) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(file, fieldnames=["path", "label"])
         writer.writeheader()
         for sample in samples:
-            writer.writerow({"path": sample.path, "label": sample.label})
+            writer.writerow({"path": _portable_sample_path(sample.path, raw_dir), "label": sample.label})
 
 
 def read_samples_csv(csv_path: Path) -> list[DatasetSample]:
-    with csv_path.open("r", newline="", encoding="utf-8") as file:
+    with csv_path.open("r", newline="", encoding="utf-8-sig") as file:
         reader = csv.DictReader(file)
         return [DatasetSample(path=row["path"], label=row["label"]) for row in reader]
+
+
+def resolve_sample_path(sample_path: str, raw_dir: Path | None = None) -> Path:
+    path = Path(sample_path)
+    if path.is_absolute():
+        return path
+
+    base_dir = raw_dir if raw_dir is not None else project_root() / "data" / "raw"
+    return base_dir.expanduser().resolve() / path
+
+
+def _portable_sample_path(sample_path: str, raw_dir: Path | None) -> str:
+    path = Path(sample_path)
+    if not path.is_absolute():
+        return path.as_posix()
+    if raw_dir is None:
+        return str(path)
+
+    try:
+        return path.resolve().relative_to(raw_dir.expanduser().resolve()).as_posix()
+    except ValueError:
+        return str(path)

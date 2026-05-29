@@ -34,3 +34,32 @@ def test_analyze_extension_mismatch(tmp_path) -> None:
     assert result.exit_code == 0
     assert '"label": "suspicious"' in result.output
     assert "extension_type_mismatch" in result.output
+
+
+def test_prepare_dataset_does_not_overwrite_existing_splits_without_force(tmp_path) -> None:
+    raw_dir = tmp_path / "raw"
+    safe_dir = raw_dir / "safe"
+    safe_dir.mkdir(parents=True)
+    Image.new("RGB", (10, 10), color="white").save(safe_dir / "safe.png")
+
+    output_dir = tmp_path / "splits"
+    output_dir.mkdir()
+    (output_dir / "train.csv").write_text("path,label\nexisting.png,safe\n", encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "prepare-dataset",
+            "--raw-dir",
+            str(raw_dir),
+            "--output-dir",
+            str(output_dir),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "already exist" in result.output
+    assert (output_dir / "train.csv").read_text(encoding="utf-8") == (
+        "path,label\nexisting.png,safe\n"
+    )
