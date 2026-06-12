@@ -130,30 +130,44 @@ Possible tools:
 
 ### 5.3 CNN Visual Classifier
 
-The CNN will analyze image pixels and produce a probability score for each class.
+The CNN will analyze image pixels and estimate binary steganography evidence:
+
+- `clean`: no visible/statistical steganographic evidence.
+- `stego`: pixel-level evidence suggests hidden content may be present.
+
+The final `safe`, `suspicious`, and `dangerous` risk labels are not assigned by the CNN alone. They are produced later by the fusion layer, which combines CNN stego probability with metadata and file-structure risk indicators.
 
 Planned model approach:
 
-1. Build a custom CNN from scratch as the main bachelor thesis model.
-2. Compare it against at least one pretrained transfer-learning model, if the professor accepts this comparison.
+1. Implement Yedroudj-Net, a published spatial-steganalysis CNN, as the literature baseline (Yedroudj, Comby & Chaumont, "Yedroudj-Net: An Efficient CNN for Spatial Steganalysis", IEEE ICASSP 2018, doi:10.1109/ICASSP.2018.8461438). A plain image-classification CNN was used in early experiments but collapsed to one class, confirming that generic visual CNNs are unsuitable for steganalysis; it was replaced by Yedroudj-Net so the thesis comparison is against a real steganalysis architecture.
+2. Build a steganalysis-oriented CNN (StegShieldCNN) sharing the same fixed 30-filter SRM residual front-end, with truncation/clipping and residual blocks.
+3. Compare both CNN variants on the binary `clean` / `stego` task.
+4. Optionally compare against a pretrained transfer-learning model if the professor accepts this comparison.
 
-The custom CNN is useful for the thesis because it demonstrates understanding of the architecture, training process, loss function, optimization, and evaluation. The transfer-learning model is useful as a benchmark because it shows how the custom model performs against a stronger existing architecture.
+The custom CNN is useful for the thesis because it demonstrates understanding of the architecture, training process, loss function, optimization, and evaluation. Yedroudj-Net is useful as a benchmark because it is a citable, peer-reviewed steganalysis architecture.
 
-Recommended custom CNN baseline:
+Yedroudj-Net baseline (adapted to RGB input by applying the SRM bank per color channel):
 
-- Input: `224x224x3` RGB image.
-- Convolution block 1: convolution, batch normalization, ReLU, max pooling.
-- Convolution block 2: convolution, batch normalization, ReLU, max pooling.
-- Convolution block 3: convolution, batch normalization, ReLU, max pooling.
-- Convolution block 4: convolution, batch normalization, ReLU, global average pooling.
-- Fully connected layer with dropout.
-- Output layer with 3 classes.
+- Input: `256x256x3` RGB image with raw `0-255` pixel values.
+- Preprocessing: fixed (non-trainable) 30-filter SRM high-pass bank, 5x5 kernels, unnormalized.
+- Block 1: 5x5 convolution (no bias), ABS activation, batch normalization, truncation (T=3), no pooling.
+- Block 2: 5x5 convolution, batch normalization, truncation (T=2), average pooling.
+- Blocks 3-5: 3x3 convolutions (32/64/128 maps), batch normalization, ReLU, average pooling; global average pooling in block 5.
+- Fully connected: 256 and 1024 neurons, then the output layer with 2 classes: `clean` and `stego`.
 
-Target classes:
+Data pipeline note: crops must be taken from the top-left corner, because sequential LSB embedders (including the Kaggle Stego Images Dataset generator) write payload bits row by row starting at pixel (0, 0); a center crop on 512x512 images removes the embedded region entirely for small payloads.
 
-- `safe`: normal image with no suspicious visual, metadata, or structural indicators.
-- `suspicious`: image with weak or moderate risk indicators, such as unusual metadata, steganographic traits, high entropy, or minor structural anomalies.
-- `dangerous`: image with strong indicators, such as known stego sample labeling, executable/archive signatures, payload-like appended data, severe format mismatch, or multiple high-risk signals.
+Mapping from project labels to CNN labels:
+
+- `safe` -> `clean`
+- `suspicious` -> `stego`
+- `dangerous` -> `stego`
+
+The three final risk labels remain:
+
+- `safe`: low CNN stego probability and low metadata/static-analysis risk.
+- `suspicious`: CNN stego evidence or metadata/static-analysis indicators suggest risk, but without strong high-severity evidence.
+- `dangerous`: strong combined evidence, embedded binary/archive signatures, severe structural anomalies, or multiple high-risk indicators.
 
 Possible comparison model:
 
@@ -161,7 +175,7 @@ Possible comparison model:
 - EfficientNet-B0
 - MobileNetV3
 
-The first implementation will start with the custom CNN. Transfer learning will be added as a comparison experiment after the baseline pipeline is stable.
+The first implementation will start with the custom baseline CNN and the steganalysis CNN. Transfer learning can be added later as a comparison experiment after the baseline pipeline is stable.
 
 ### 5.4 Metadata Extraction Module
 
@@ -226,18 +240,29 @@ Recommended first version:
 - Rule-based metadata risk score from `0.0` to `1.0`.
 - Later, convert metadata features into a machine learning classifier.
 
+Implemented rule highlights:
+
+- Sequential-LSB payload estimator (inspired by Westfeld & Pfitzmann, Information
+  Hiding 1999): detects the leading noise-like LSB run left by sequential embedding
+  and estimates payload size; script/binary-scale payloads (>= 128 bytes) are
+  high-severity, marker-scale payloads are medium-severity.
+- Trailing-data detection after the JPEG EOI marker and the PNG IEND chunk.
+- Embedded executable detection with PE-header validation (e_lfanew -> `PE\x00\x00`)
+  rather than raw two-byte "MZ" matching, which false-positives on compressed pixel
+  data; archive signatures require at least four bytes.
+
 ### 5.6 Fusion / Decision Layer
 
 The decision layer combines:
 
-- CNN probability score.
+- CNN stego probability score.
 - Metadata risk score.
-- Optional structural anomaly score.
+- High-severity metadata and structural indicators.
 
 Example formula:
 
 ```text
-final_risk = 0.55 * cnn_risk + 0.45 * metadata_risk
+final_risk = 0.60 * cnn_stego_probability + 0.40 * metadata_risk
 ```
 
 Example labels:
@@ -248,14 +273,15 @@ Example labels:
 0.70 - 1.00 -> dangerous
 ```
 
-The weighting should be tuned during evaluation. If metadata indicators are very strong, they may override the CNN result. For the three-label setup, the CNN can output three probabilities, while the metadata analyzer outputs a risk score and rule-trigger list. The fusion layer should keep the final decision explainable.
+The weighting should be tuned during evaluation. If metadata or file-structure indicators are very strong, they may override or strongly increase the CNN result. The CNN outputs binary steganography evidence, while the metadata analyzer outputs a risk score and a rule-trigger list. The fusion layer should keep the final decision explainable.
 
 Example override rules:
 
-- If the file contains executable headers after image data, label at least `suspicious`.
+- If the file contains executable/archive signatures inside image data, label as `dangerous` or strongly increase the score.
 - If the file extension and MIME type are inconsistent, label at least `suspicious`.
 - If parsing fails but file claims to be an image, label at least `suspicious`.
-- If multiple high-risk indicators are triggered, label as `dangerous` even if the CNN prediction is uncertain.
+- If high CNN stego probability is combined with high-severity metadata indicators, label as `dangerous`.
+- If multiple high-risk indicators are triggered, label as `dangerous` even if the CNN probability is uncertain.
 
 ## 6. Dataset Strategy
 
@@ -374,9 +400,10 @@ Important:
 Build simple baselines first:
 
 - Metadata-only rule classifier.
-- Custom CNN-only classifier.
+- Yedroudj-Net binary clean/stego classifier (literature steganalysis baseline).
+- StegShield steganalysis CNN binary clean/stego classifier.
 - Optional pretrained CNN classifier for comparison.
-- Combined CNN plus metadata classifier.
+- Combined CNN plus metadata fusion classifier for final `safe` / `suspicious` / `dangerous` output.
 
 This will allow comparison and make the thesis stronger.
 
@@ -385,13 +412,13 @@ This will allow comparison and make the thesis stronger.
 1. Collect and organize dataset.
 2. Create labels file such as `labels.csv`.
 3. Implement image preprocessing.
-4. Train custom CNN model from scratch.
+4. Train custom binary clean/stego CNN model from scratch.
 5. Validate on held-out validation set.
 6. Tune hyperparameters.
 7. Optionally train a transfer-learning model for comparison.
 8. Extract metadata features for all samples.
 9. Implement metadata risk score.
-10. Combine CNN and metadata outputs.
+10. Combine CNN stego probability and metadata outputs through the fusion layer.
 11. Evaluate on final test set.
 
 ### 7.3 Metrics
@@ -402,7 +429,7 @@ Use the following evaluation metrics:
 - Precision
 - Recall
 - F1-score
-- Macro-F1 for balanced three-class evaluation
+- Macro-F1 for both binary CNN evaluation and balanced three-class fusion evaluation
 - Per-class precision and recall
 - ROC-AUC only for binary sub-experiments or one-vs-rest analysis
 - Confusion matrix
@@ -410,6 +437,41 @@ Use the following evaluation metrics:
 - False negative rate
 
 For a security project, recall is especially important because false negatives mean dangerous files are missed. However, precision also matters because too many false alarms make the system less useful.
+
+Accuracy must be treated as a secondary metric because the binary clean/stego task can
+be imbalanced. A model that predicts only the majority class may obtain acceptable
+accuracy while having zero recall for the minority class. Final CNN checkpoints should
+therefore be selected using macro-F1 or balanced accuracy, and final result tables
+should include per-class recalls and false negatives.
+
+### 7.4 Thesis Interpretation of Early CNN Results
+
+The binary CNN is a visual steganography evidence estimator, not a complete image-risk
+classifier. It is used because the original three-class task mixes different types of
+evidence: visual steganography evidence, metadata risk, and structural file anomalies.
+Separating these signals makes the methodology easier to defend.
+
+The baseline CNN is included as a control model. If it collapses to one class, this
+should be reported honestly as a limitation of naive CNN-only detection. The
+steganalysis CNN is expected to be stronger because RGB high-pass residual filters,
+truncation, and residual blocks focus the model on small residual artifacts rather than
+only semantic image content.
+
+Current early results should be interpreted conservatively: the steganalysis CNN can
+improve macro-F1 and balanced accuracy over the naive baseline, but low stego recall
+means CNN-only detection is insufficient. The thesis should emphasize the hybrid
+architecture and compare:
+
+- baseline CNN;
+- steganalysis CNN;
+- metadata-only static analysis;
+- CNN-only binary stego evidence converted to risk;
+- fused final risk classification.
+
+The final conclusion should not claim reliable malware detection or perfect
+steganography detection. It can claim that the project implements and evaluates a
+reproducible hybrid pipeline, and that metadata/static analysis is necessary to
+compensate for weak CNN-only performance on the available dataset.
 
 ## 8. Suggested Technology Stack
 
@@ -694,6 +756,7 @@ Features:
 - Add evaluation scripts.
 - Generate confusion matrix and metrics.
 - Compare metadata-only, custom CNN-only, optional pretrained CNN, and fusion system.
+- Report metadata-only, CNN-only, and fused final risk metrics separately.
 
 ### Version 0.5
 

@@ -6,7 +6,11 @@ from typing import Any
 
 from PIL import Image, UnidentifiedImageError
 
-from stegshield.utils.file_validation import detect_file_identity, find_trailing_jpeg_bytes
+from stegshield.utils.file_validation import (
+    detect_file_identity,
+    find_trailing_jpeg_bytes,
+    find_trailing_png_bytes,
+)
 from stegshield.utils.hashing import sha256_file
 
 
@@ -26,7 +30,7 @@ class ImageMetadata:
     image_format: str | None
     metadata_fields: dict[str, str]
     metadata_text_size: int
-    trailing_bytes_after_jpeg_eoi: int
+    trailing_bytes_after_image_end: int
     parse_error: str | None
 
 
@@ -72,11 +76,17 @@ def extract_image_metadata(path: Path) -> ImageMetadata:
         image_format=image_format,
         metadata_fields=metadata_fields,
         metadata_text_size=metadata_text_size,
-        trailing_bytes_after_jpeg_eoi=find_trailing_jpeg_bytes(path)
-        if identity.detected_type == "jpeg"
-        else 0,
+        trailing_bytes_after_image_end=_trailing_bytes(path, identity.detected_type),
         parse_error=parse_error,
     )
+
+
+def _trailing_bytes(path: Path, detected_type: str) -> int:
+    if detected_type == "jpeg":
+        return find_trailing_jpeg_bytes(path)
+    if detected_type == "png":
+        return find_trailing_png_bytes(path)
+    return 0
 
 
 def _stringify_mapping(mapping: dict[str, Any]) -> dict[str, str]:

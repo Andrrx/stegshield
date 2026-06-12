@@ -1,6 +1,8 @@
 from typer.testing import CliRunner
 from PIL import Image
 
+import pytest
+
 from stegshield.cli import app
 
 
@@ -63,3 +65,43 @@ def test_prepare_dataset_does_not_overwrite_existing_splits_without_force(tmp_pa
     assert (output_dir / "train.csv").read_text(encoding="utf-8") == (
         "path,label\nexisting.png,safe\n"
     )
+
+
+def test_analyze_outputs_optional_cnn_fusion(tmp_path) -> None:
+    torch = pytest.importorskip("torch")
+    from stegshield.labels import STEGO_LABELS
+    from stegshield.models.cnn import create_cnn_model
+
+    image_path = tmp_path / "safe.png"
+    Image.new("RGB", (16, 16), color="white").save(image_path)
+
+    model = create_cnn_model("yedroudj", num_classes=len(STEGO_LABELS))
+    model_path = tmp_path / "binary_cnn.pt"
+    torch.save(
+        {
+            "model_state_dict": model.state_dict(),
+            "labels": STEGO_LABELS,
+            "image_size": 16,
+            "model_name": "yedroudj",
+            "normalization": "none",
+            "task": "stego",
+        },
+        model_path,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "analyze",
+            str(image_path),
+            "--json",
+            "--cnn-model-path",
+            str(model_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert '"risk"' in result.output
+    assert '"fusion"' in result.output
+    assert '"cnn_stego_probability"' in result.output

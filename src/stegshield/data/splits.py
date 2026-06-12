@@ -23,6 +23,7 @@ SUPPORTED_IMAGE_EXTENSIONS = {
 class DatasetSample:
     path: str
     label: str
+    payload_bytes: int | None = None
 
 
 def project_root() -> Path:
@@ -109,7 +110,21 @@ def write_samples_csv(
 def read_samples_csv(csv_path: Path) -> list[DatasetSample]:
     with csv_path.open("r", newline="", encoding="utf-8-sig") as file:
         reader = csv.DictReader(file)
-        return [DatasetSample(path=row["path"], label=row["label"]) for row in reader]
+        return [
+            DatasetSample(
+                path=row["path"],
+                label=row["label"],
+                payload_bytes=_parse_payload_bytes(row.get("payload_bytes")),
+            )
+            for row in reader
+        ]
+
+
+def _parse_payload_bytes(value: str | None) -> int | None:
+    """Empty or missing payload size means unknown (masked during training)."""
+    if value is None or value.strip() == "":
+        return None
+    return int(value)
 
 
 def resolve_sample_path(sample_path: str, raw_dir: Path | None = None) -> Path:

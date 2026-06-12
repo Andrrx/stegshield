@@ -57,3 +57,6 @@ data/raw/dangerous/**
 !outputs/models/.gitkeep
 !outputs/reports/.gitkeep
 !outputs/figures/.gitkeep
+
+# Loose dataset reference CSV (data artifact)
+data/*.csv

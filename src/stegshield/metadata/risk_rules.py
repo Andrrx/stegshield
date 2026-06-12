@@ -3,7 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from stegshield.metadata.extract import ImageMetadata
+from stegshield.metadata.lsb_payload import estimate_sequential_lsb_payload
 from stegshield.utils.file_validation import find_embedded_signatures
+
+# Sequential LSB payloads above this size are script/binary-scale rather than
+# marker-scale (addresses, URLs), so they carry high severity.
+LARGE_LSB_PAYLOAD_BYTES = 128
 
 
 @dataclass(frozen=True)
@@ -36,7 +41,14 @@ SUSPICIOUS_METADATA_TERMS = (
 )
 
 
-def assess_risk(metadata: ImageMetadata) -> RiskAssessment:
+def assess_risk(metadata: ImageMetadata, include_statistical_lsb: bool = True) -> RiskAssessment:
+    """Assess static file risk.
+
+    ``include_statistical_lsb`` toggles the statistical sequential-LSB payload
+    estimator (stegshield.metadata.lsb_payload). It is turned off when fusion is
+    configured to use the CNN payload estimate instead, so the two payload
+    sources can be compared without double-counting.
+    """
     indicators: list[RiskIndicator] = []
 
     if metadata.detected_type == "unknown":
@@ -66,14 +78,14 @@ def assess_risk(metadata: ImageMetadata) -> RiskAssessment:
             )
         )
 
-    if metadata.trailing_bytes_after_jpeg_eoi > 0:
+    if metadata.trailing_bytes_after_image_end > 0:
         indicators.append(
             RiskIndicator(
-                code="jpeg_trailing_data",
+                code="trailing_data_after_image_end",
                 severity="medium",
                 description=(
-                    "JPEG contains data after the end-of-image marker "
-                    f"({metadata.trailing_bytes_after_jpeg_eoi} bytes)."
+                    "File contains data after the image end marker "
+                    f"({metadata.trailing_bytes_after_image_end} bytes)."
                 ),
             )
         )
@@ -87,6 +99,31 @@ def assess_risk(metadata: ImageMetadata) -> RiskAssessment:
                 description=f"Found embedded {signature} signature inside the file.",
             )
         )
+
+    lsb_payload = estimate_sequential_lsb_payload(metadata.path) if include_statistical_lsb else None
+    if lsb_payload is not None:
+        if lsb_payload.estimated_payload_bytes >= LARGE_LSB_PAYLOAD_BYTES:
+            indicators.append(
+                RiskIndicator(
+                    code="sequential_lsb_payload_large",
+                    severity="high",
+                    description=(
+                        "Sequential LSB embedding detected with a script/binary-scale payload "
+                        f"(~{lsb_payload.estimated_payload_bytes} bytes)."
+                    ),
+                )
+            )
+        else:
+            indicators.append(
+                RiskIndicator(
+                    code="sequential_lsb_payload",
+                    severity="medium",
+                    description=(
+                        "Sequential LSB embedding detected with a small payload "
+                        f"(~{lsb_payload.estimated_payload_bytes} bytes)."
+                    ),
+                )
+            )
 
     if metadata.metadata_text_size > 16_384:
         indicators.append(
@@ -123,10 +160,44 @@ def assess_risk(metadata: ImageMetadata) -> RiskAssessment:
                 )
             )
 
-    score = min(sum(_severity_weight(indicator.severity) for indicator in indicators), 1.0)
-    label = _label_from_score(score)
+    return build_assessment(indicators)
 
-    return RiskAssessment(label=label, risk_score=round(score, 3), indicators=indicators)
+
+def build_assessment(indicators: list[RiskIndicator]) -> RiskAssessment:
+    """Sum severity weights into a clamped risk score and a 3-way label."""
+    score = min(sum(_severity_weight(indicator.severity) for indicator in indicators), 1.0)
+    return RiskAssessment(
+        label=_label_from_score(score), risk_score=round(score, 3), indicators=indicators
+    )
+
+
+def cnn_payload_indicators(payload_bytes: int | None) -> list[RiskIndicator]:
+    """Turn a CNN payload-size estimate into risk indicators (same 128-byte gate).
+
+    Returns an empty list when there is no estimate or it is non-positive. The
+    caller is responsible for only passing an estimate when the CNN considers the
+    image stego, since the regression head is never supervised on clean images.
+    """
+    if payload_bytes is None or payload_bytes <= 0:
+        return []
+    if payload_bytes >= LARGE_LSB_PAYLOAD_BYTES:
+        return [
+            RiskIndicator(
+                code="cnn_lsb_payload_large",
+                severity="high",
+                description=(
+                    "CNN estimates a script/binary-scale sequential LSB payload "
+                    f"(~{payload_bytes} bytes)."
+                ),
+            )
+        ]
+    return [
+        RiskIndicator(
+            code="cnn_lsb_payload",
+            severity="medium",
+            description=f"CNN estimates a small sequential LSB payload (~{payload_bytes} bytes).",
+        )
+    ]
 
 
 def _severity_weight(severity: str) -> float:

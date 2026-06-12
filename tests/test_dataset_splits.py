@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from stegshield.data.kaggle_stegoimages import create_kaggle_stegoimage_splits
@@ -10,6 +11,8 @@ from stegshield.data.splits import (
     resolve_sample_path,
     write_split_csvs,
 )
+from stegshield.data.torch_dataset import ImageRiskDataset
+from stegshield.train_cnn import _balanced_sampler
 
 
 def test_collect_labeled_images(tmp_path: Path) -> None:
@@ -115,3 +118,80 @@ def test_create_kaggle_stegoimage_splits_preserves_official_layout(tmp_path: Pat
 
     train_samples = read_samples_csv(output_dir / "train.csv")
     assert all(not Path(sample.path).is_absolute() for sample in train_samples)
+
+
+def test_image_dataset_can_disable_imagenet_normalization(tmp_path: Path) -> None:
+    raw_dir = tmp_path / "raw"
+    image_dir = raw_dir / "safe"
+    image_dir.mkdir(parents=True)
+    image_path = image_dir / "white.png"
+    Image.new("RGB", (8, 8), color="white").save(image_path)
+
+    csv_path = tmp_path / "samples.csv"
+    csv_path.write_text("path,label\nsafe/white.png,safe\n", encoding="utf-8")
+
+    dataset = ImageRiskDataset(csv_path, image_size=8, raw_dir=raw_dir, normalization="none")
+    image_tensor, label = dataset[0]
+
+    assert label == 0
+    assert float(image_tensor.min()) == 1.0
+    assert float(image_tensor.max()) == 1.0
+
+
+def test_image_dataset_maps_risk_labels_to_binary_stego_task(tmp_path: Path) -> None:
+    raw_dir = tmp_path / "raw"
+    for label in ("safe", "suspicious", "dangerous"):
+        image_dir = raw_dir / label
+        image_dir.mkdir(parents=True)
+        Image.new("RGB", (8, 8), color="white").save(image_dir / f"{label}.png")
+
+    csv_path = tmp_path / "samples.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "path,label",
+                "safe/safe.png,safe",
+                "suspicious/suspicious.png,suspicious",
+                "dangerous/dangerous.png,dangerous",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    dataset = ImageRiskDataset(csv_path, image_size=8, raw_dir=raw_dir, task="stego")
+
+    assert dataset[0][1] == 0
+    assert dataset[1][1] == 1
+    assert dataset[2][1] == 1
+
+
+def test_balanced_sampler_weights_minority_class_more_heavily(tmp_path: Path) -> None:
+    raw_dir = tmp_path / "raw"
+    safe_dir = raw_dir / "safe"
+    suspicious_dir = raw_dir / "suspicious"
+    safe_dir.mkdir(parents=True)
+    suspicious_dir.mkdir(parents=True)
+    Image.new("RGB", (8, 8), color="white").save(safe_dir / "safe.png")
+    for index in range(3):
+        Image.new("RGB", (8, 8), color="white").save(suspicious_dir / f"suspicious-{index}.png")
+
+    csv_path = tmp_path / "samples.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "path,label",
+                "safe/safe.png,safe",
+                "suspicious/suspicious-0.png,suspicious",
+                "suspicious/suspicious-1.png,suspicious",
+                "suspicious/suspicious-2.png,suspicious",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    dataset = ImageRiskDataset(csv_path, image_size=8, raw_dir=raw_dir, task="stego")
+    sampler = _balanced_sampler(dataset.samples, task="stego")
+    weights = sampler.weights.tolist()
+
+    assert weights[0] == 1.0
+    assert weights[1:] == pytest.approx([1 / 3, 1 / 3, 1 / 3])
