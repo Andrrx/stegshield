@@ -107,6 +107,12 @@ def sample_augmentation(image: Image.Image, rng: random.Random) -> Image.Image:
 
     Called per-sample during training when augmentation is enabled. Roughly half
     the samples are left untouched so the detector still sees pristine images.
+
+    Note: a heavier-noise variant of this menu was tested (identity 40%, noise
+    25%) and did not improve robustness — at each model's best threshold the two
+    were within noise (see docs/robustness_deployment.md). Robustness to additive
+    noise is limited by the signal (the +/-1 LSB perturbation sits below a
+    sigma>=2 noise floor), not by the amount of augmentation.
     """
     choice = rng.random()
     if choice < 0.5:

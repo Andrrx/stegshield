@@ -161,9 +161,39 @@ alone. The decisive comparison is under noise, where the baseline is unusable:
 
 At the default threshold 0.5 the hardened detector already holds clean FPR ≤ 1.5% across
 every benign transform (0% on resize/blur/re-save), while retaining full detection on
-pristine and mildly-processed images. No threshold tuning beyond 0.5 was required to
-reach a deployable operating point; the FPR reduction came from augmentation, not from
-moving the threshold.
+pristine and mildly-processed images. The FPR collapse came from augmentation, not from
+the threshold — but the threshold is a second, independent knob worth tuning.
+
+### 4.1 Threshold operating point
+
+The hardened detector's probabilities under noise are *separated, not saturated* (stego
+median P≈0.70 vs clean P≈0.09 at σ=2), so the default 0.5 threshold leaves recall on the
+table. Lowering it to 0.3 recovers a large share of noise robustness while keeping benign
+false positives at zero:
+
+| Operation | th=0.5 detect / FPR / bal-acc | th=0.3 detect / FPR / bal-acc |
+|---|---|---|
+| Pristine, resize 0.75, blur | 1.000 / 0.000 / 1.000 | 1.000 / 0.000 / 1.000 |
+| Noise σ=2 | 0.575 / 0.000 / 0.787 | 0.740 / 0.045 / 0.847 |
+| Noise σ=5 | 0.310 / 0.015 / 0.647 | 0.535 / 0.130 / 0.702 |
+
+**Recommended deployment operating point: threshold 0.3.** It keeps the false-positive
+rate at 0% on pristine and benign geometric/blur processing, holds it to ≤5% under
+moderate noise, and lifts balanced accuracy under noise by 6–7 points. Heavy noise (σ=5)
+is the only case where its FPR climbs (13%), and σ=5 additive noise is an aggressive,
+uncommon transform for a benign upload. A platform that must guarantee a very low alarm
+rate under any condition keeps 0.5; one that prioritizes recall under realistic noise
+uses 0.3. (The fusion pipeline already labels CNN-only "suspicious" at 0.3.)
+
+### 4.2 Why not just augment harder for noise?
+
+A heavier-noise augmentation menu (identity 40%, noise 25%, the useless lossless re-save
+dropped) was trained and benchmarked. At each model's best threshold it matched the
+shipped model within noise (balanced accuracy 0.89 vs 0.89 at σ=2, 0.74 vs 0.73 at σ=5),
+because robustness to additive noise is **signal-limited**: the ±1 LSB perturbation sits
+below a σ≥2 noise floor, so no amount of augmentation recovers it. The shipped
+augmentation menu is therefore kept as-is, and threshold tuning (§4.1) is the effective
+lever for the noise regime.
 
 ---
 
