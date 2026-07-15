@@ -48,6 +48,7 @@ def generate_plots(config: PlotConfig) -> list[Path]:
     written: list[Path] = []
     comparison_entries: list[_ComparisonEntry] = []
     roc_entries: list[_RocEntry] = []
+    robustness_reports: list[tuple[str, dict[str, Any]]] = []
 
     for report_path in config.report_paths:
         report = json.loads(report_path.read_text(encoding="utf-8"))
@@ -59,6 +60,10 @@ def generate_plots(config: PlotConfig) -> list[Path]:
             continue
         if report_type == "payload_agreement":
             written.append(_plot_payload_agreement(name, report, config))
+            continue
+        if report_type == "robustness_benchmark":
+            written.append(_plot_robustness(name, report, config))
+            robustness_reports.append((name, report))
             continue
 
         if "history" in report:
@@ -97,6 +102,8 @@ def generate_plots(config: PlotConfig) -> list[Path]:
         written.append(_plot_comparison(comparison_entries, config))
     if roc_entries:
         written.append(_plot_roc_curves(roc_entries, config))
+    if len(robustness_reports) >= 2:
+        written.append(_plot_robustness_overlay(robustness_reports, config))
     return written
 
 
@@ -286,6 +293,62 @@ def _plot_payload_agreement(name: str, report: dict[str, Any], config: PlotConfi
     axis.grid(alpha=0.3, which="both")
     axis.legend(loc="upper left", fontsize=8)
     return _save(figure, config, f"{name}_scatter.png")
+
+
+def _plot_robustness(name: str, report: dict[str, Any], config: PlotConfig) -> Path:
+    ops = report["operations"]
+    labels = [op["name"] for op in ops]
+    detection = [op["stego_detection_rate"] for op in ops]
+    fpr = [op["clean_fpr"] for op in ops]
+    positions = list(range(len(ops)))
+    bar_width = 0.4
+
+    figure, axis = plt.subplots(figsize=(max(7.0, 0.7 * len(ops)), 4.6))
+    detect_bars = axis.bar(
+        [p - bar_width / 2 for p in positions], detection, bar_width, label="Stego detection rate"
+    )
+    axis.bar(
+        [p + bar_width / 2 for p in positions], fpr, bar_width, label="Clean false-positive rate"
+    )
+    axis.bar_label(detect_bars, fmt="%.2f", fontsize=7, padding=1)
+    # Shade the lossy (JPEG) operations to mark where spatial detection collapses.
+    for index, op in enumerate(ops):
+        if op["lossy"]:
+            axis.axvspan(index - 0.5, index + 0.5, color="tab:red", alpha=0.06)
+
+    axis.set_xticks(positions, labels, rotation=40, ha="right")
+    axis.set_ylim(0.0, 1.05)
+    axis.set_ylabel("Rate")
+    axis.set_title(f"Robustness to image processing\n{name}")
+    axis.grid(axis="y", alpha=0.3)
+    axis.legend(loc="center right", fontsize=8)
+    return _save(figure, config, f"{name}_robustness.png")
+
+
+def _plot_robustness_overlay(
+    reports: list[tuple[str, dict[str, Any]]], config: PlotConfig
+) -> Path:
+    # Balanced accuracy, not raw detection rate: under noise a detector can hit
+    # 100% detection by also flagging clean images, so detection rate alone
+    # overstates robustness. Balanced accuracy penalizes that.
+    figure, axis = plt.subplots(figsize=(8.0, 4.6))
+    labels = [op["name"] for op in reports[0][1]["operations"]]
+    positions = list(range(len(labels)))
+    for name, report in reports:
+        balanced = [op.get("balanced_accuracy", 0.0) for op in report["operations"]]
+        axis.plot(positions, balanced, marker="o", markersize=4, linewidth=1.6, label=name)
+    axis.axhline(0.5, color="gray", linestyle=":", linewidth=1, label="chance")
+    for index, op in enumerate(reports[0][1]["operations"]):
+        if op["lossy"]:
+            axis.axvspan(index - 0.5, index + 0.5, color="tab:red", alpha=0.06)
+
+    axis.set_xticks(positions, labels, rotation=40, ha="right")
+    axis.set_ylim(0.4, 1.05)
+    axis.set_ylabel("Balanced accuracy")
+    axis.set_title("Robustness (balanced accuracy): baseline vs hardened")
+    axis.grid(alpha=0.3)
+    axis.legend(fontsize=8)
+    return _save(figure, config, "robustness_overlay.png")
 
 
 def _save(figure: plt.Figure, config: PlotConfig, filename: str) -> Path:

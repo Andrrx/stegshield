@@ -44,6 +44,53 @@ def analyze(
     _print_human_report(result)
 
 
+@app.command()
+def scan(
+    image_path: Path,
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON output."),
+    cnn_model_path: Path | None = typer.Option(
+        None,
+        "--cnn-model-path",
+        help="Hardened clean/stego CNN checkpoint (used only for lossless images).",
+    ),
+    device: str = typer.Option("cpu", "--device", help="Torch device for optional CNN inference."),
+) -> None:
+    """Scan one image through the deployment router (format-aware defense layer).
+
+    Lossless images (PNG/BMP/TIFF) get spatial CNN + static analysis; lossy images
+    (JPEG/WebP) get static analysis only, since re-encoding neutralizes LSB stego.
+    """
+    if not image_path.exists():
+        raise typer.BadParameter(f"File does not exist: {image_path}")
+    if not image_path.is_file():
+        raise typer.BadParameter(f"Path is not a file: {image_path}")
+
+    from stegshield.router import scan_image
+
+    predictor = None
+    if cnn_model_path is not None:
+        from stegshield.predict_cnn import StegoPredictor
+
+        predictor = StegoPredictor(model_path=cnn_model_path, device=device)
+
+    verdict = scan_image(image_path, predictor=predictor, device=device)
+
+    if json_output:
+        print(json.dumps(verdict.to_dict(), indent=2))
+        return
+
+    console.print("[bold]StegShield scan[/bold]")
+    console.print(f"File: {verdict.path}")
+    console.print(f"Detected type: {verdict.detected_type} ({verdict.processing_state})")
+    console.print(f"Spatial LSB analysis applicable: {verdict.spatial_lsb_applicable}")
+    console.print(f"Analyses run: {', '.join(verdict.analyses_run)}")
+    console.print(f"Label: [bold]{verdict.label}[/bold]  (risk {verdict.risk_score})")
+    if verdict.cnn_stego_probability is not None:
+        console.print(f"CNN stego probability: {verdict.cnn_stego_probability:.4f}")
+    console.print(f"Explanation: {verdict.explanation}")
+    console.print(f"Latency: {verdict.latency_ms} ms")
+
+
 @app.command("doctor")
 def doctor(
     device: str = typer.Option("cuda", "--device", help="Device to validate, for example cuda or cuda:0."),
@@ -293,6 +340,11 @@ def train_cnn_command(
         min=0.0,
         help="Weight of the masked smooth-L1 payload-regression loss in the total loss.",
     ),
+    augment: bool = typer.Option(
+        False,
+        "--augment/--no-augment",
+        help="Payload-preserving processing augmentation (resize/blur/noise/re-save) for robustness.",
+    ),
 ) -> None:
     """Train the custom CNN from scratch using prepared split CSV files."""
     from stegshield.doctor import build_torch_doctor_report
@@ -320,6 +372,7 @@ def train_cnn_command(
         amp=amp,
         payload_head=payload_head,
         payload_loss_weight=payload_loss_weight,
+        augment=augment,
     )
     doctor_report = build_torch_doctor_report(requested_device=device)
     console.print("[bold]Training device[/bold]")
@@ -479,6 +532,50 @@ def evaluate_fusion_command(
     console.print(f"Payload source: {payload_source}")
     console.print(f"Fused accuracy: {report['methods']['fused']['accuracy']:.4f}")
     console.print(f"Fused macro F1: {report['methods']['fused']['macro_f1']:.4f}")
+
+
+@app.command("evaluate-robustness")
+def evaluate_robustness_command(
+    model_path: Path = typer.Option(Path("outputs/models/steganalysis_stego.pt"), "--model-path"),
+    split_csv: Path = typer.Option(Path("data/splits/test_standard.csv"), "--split-csv"),
+    output_report: Path = typer.Option(
+        Path("outputs/reports/robustness_benchmark.json"),
+        "--output-report",
+    ),
+    raw_dir: Path | None = typer.Option(None, "--raw-dir"),
+    device: str = typer.Option("cpu", "--device"),
+    threshold: float = typer.Option(0.5, "--threshold", min=0.0, max=1.0),
+    limit_per_class: int | None = typer.Option(
+        200,
+        "--limit-per-class",
+        min=1,
+        help="Max clean and max stego images sampled per operation (speed).",
+    ),
+    batch_size: int = typer.Option(32, "--batch-size", min=1),
+) -> None:
+    """Measure detection under benign and lossy processing (JPEG, resize, blur, noise)."""
+    from stegshield.robustness import RobustnessConfig, evaluate_robustness
+
+    report = evaluate_robustness(
+        RobustnessConfig(
+            model_path=model_path,
+            split_csv=split_csv,
+            output_report=output_report,
+            raw_dir=raw_dir,
+            device=device,
+            threshold=threshold,
+            limit_per_class=limit_per_class,
+            batch_size=batch_size,
+        )
+    )
+    console.print("[bold]Robustness benchmark complete[/bold]")
+    console.print(f"Report: {output_report}")
+    console.print(f"{'operation':14s} {'detect':>8s} {'clean_FPR':>10s}")
+    for op in report["operations"]:
+        console.print(
+            f"{op['name']:14s} {op['stego_detection_rate']:>8.3f} {op['clean_fpr']:>10.3f}"
+            + ("  [lossy]" if op["lossy"] else "")
+        )
 
 
 @app.command("evaluate-payload-regression")

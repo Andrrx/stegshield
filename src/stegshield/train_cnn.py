@@ -46,6 +46,7 @@ class TrainingConfig:
     amp: bool = False
     payload_head: bool = False
     payload_loss_weight: float = 0.5
+    augment: bool = False
 
 
 def train_cnn(config: TrainingConfig) -> dict[str, object]:
@@ -64,7 +65,9 @@ def train_cnn(config: TrainingConfig) -> dict[str, object]:
         task=config.task,
         crop=config.crop,
         with_payload_target=config.payload_head,
+        augment=config.augment,
     )
+    # Validation is never augmented: it measures pristine-image performance.
     val_dataset = ImageRiskDataset(
         config.val_csv,
         image_size=config.image_size,
@@ -272,6 +275,7 @@ def _checkpoint_metadata(
         "device": config.device,
         "num_workers": config.num_workers,
         "amp": config.amp,
+        "augment": config.augment,
         "payload_head": config.payload_head,
         "payload_loss_weight": config.payload_loss_weight if config.payload_head else None,
         "payload_capacity_bytes": crop_capacity_bytes(config.image_size)

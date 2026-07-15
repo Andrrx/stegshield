@@ -291,6 +291,33 @@ unaffected, and detection-only checkpoints load unchanged. Full step-by-step exp
 (detection no-regression check, regression MAE, CNN-vs-statistical agreement, fusion
 comparison) are in [docs/payload_head_experiments.md](docs/payload_head_experiments.md).
 
+## Robustness Hardening and Deployment Router
+
+Spatial LSB steganalysis is only valid on losslessly-stored images: JPEG re-encoding
+destroys both the payload and its detectability (measured: 100% → 0% detection under
+JPEG). Two additions turn the detector into a deployable defense layer:
+
+- **Robustness hardening**: train with `--augment` for payload-preserving processing
+  augmentation (resize/blur/noise/lossless re-save). This keeps the clean
+  false-positive rate near zero under noise, where the un-augmented baseline flags
+  ~96% of legitimate images. Benchmark any model with `evaluate-robustness`.
+- **Deployment router** (`stegshield scan`): inspects each file's stored format and
+  routes lossless images (PNG/BMP/TIFF) to the spatial CNN + static analysis, and lossy
+  images (JPEG/WebP) to static analysis only — reporting `spatial_lsb_applicable: false`
+  rather than a meaningless verdict.
+
+```powershell
+stegshield train-cnn --task stego --model steganalysis --augment --device cuda `
+  --output-model outputs/models/steganalysis_hardened.pt
+stegshield evaluate-robustness --model-path outputs/models/steganalysis_hardened.pt `
+  --split-csv data/splits/test_standard.csv --device cuda `
+  --output-report outputs/reports/robustness_hardened.json
+stegshield scan image.png --cnn-model-path outputs/models/steganalysis_hardened.pt --json
+```
+
+Full analysis, benchmark tables, and the threat/deployment model are in
+[docs/robustness_deployment.md](docs/robustness_deployment.md).
+
 ## Thesis Figures
 
 Create publication-ready figures (300 dpi PNG) from any training or evaluation

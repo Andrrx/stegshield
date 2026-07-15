@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import random
 from functools import partial
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from torchvision import transforms
 from stegshield.data.splits import read_samples_csv, resolve_sample_path
 from stegshield.data.synth_lsb import crop_capacity_bytes
 from stegshield.labels import label_to_index_for_task
+from stegshield.processing import sample_augmentation
 
 CROP_MODES = ("top-left", "center")
 
@@ -45,6 +47,7 @@ class ImageRiskDataset(Dataset):
         task: str = "stego",
         crop: str = "top-left",
         with_payload_target: bool = False,
+        augment: bool = False,
     ) -> None:
         self.samples = read_samples_csv(csv_path)
         self.raw_dir = raw_dir
@@ -52,7 +55,7 @@ class ImageRiskDataset(Dataset):
         self.with_payload_target = with_payload_target
         self.capacity_bytes = crop_capacity_bytes(image_size)
         self.transform = _build_transform(
-            image_size=image_size, normalization=normalization, crop=crop
+            image_size=image_size, normalization=normalization, crop=crop, augment=augment
         )
 
     def __len__(self) -> int:
@@ -101,10 +104,23 @@ def _scale_to_255(tensor: Tensor) -> Tensor:
     return tensor * 255.0
 
 
-def _build_transform(image_size: int, normalization: str, crop: str = "top-left") -> transforms.Compose:
-    steps: list[object] = [
-        transforms.Lambda(partial(_ensure_min_size, target_size=image_size)),
-    ]
+def _augment_pil(image: Image.Image) -> Image.Image:
+    # Fresh per-call Random so DataLoader worker processes diverge and augmentation
+    # varies across epochs; exact reproducibility is not needed for augmentation.
+    return sample_augmentation(image, random.Random())
+
+
+def _build_transform(
+    image_size: int,
+    normalization: str,
+    crop: str = "top-left",
+    augment: bool = False,
+) -> transforms.Compose:
+    steps: list[object] = []
+    if augment:
+        # Payload-preserving processing on the full-resolution image, before crop.
+        steps.append(transforms.Lambda(_augment_pil))
+    steps.append(transforms.Lambda(partial(_ensure_min_size, target_size=image_size)))
     if crop == "top-left":
         steps.append(transforms.Lambda(partial(_crop_top_left, target_size=image_size)))
     elif crop == "center":
